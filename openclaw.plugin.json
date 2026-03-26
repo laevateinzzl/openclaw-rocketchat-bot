@@ -1,0 +1,106 @@
+{
+  "id": "rocketchat",
+  "name": "Rocket.Chat",
+  "description": "Rocket.Chat channel plugin for OpenClaw with REST polling and WebSocket inbound support.",
+  "version": "0.1.0",
+  "kind": "channel",
+  "channels": ["rocketchat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "accounts": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "serverUrl": { "type": "string", "minLength": 1 },
+            "auth": {
+              "type": "object",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "token" },
+                    "userId": { "type": "string", "minLength": 1 },
+                    "accessToken": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["mode", "userId", "accessToken"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "password" },
+                    "username": { "type": "string", "minLength": 1 },
+                    "password": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["mode", "username", "password"]
+                }
+              ]
+            },
+            "transport": {
+              "type": "object",
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "polling" },
+                    "pollIntervalMs": { "type": "integer", "minimum": 1000 }
+                  },
+                  "required": ["mode"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "websocket" },
+                    "reconnectDelayMs": { "type": "integer", "minimum": 1000 }
+                  },
+                  "required": ["mode"]
+                }
+              ]
+            },
+            "mentionNames": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          },
+          "required": ["enabled", "serverUrl", "auth"]
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "accounts.*.serverUrl": {
+      "label": "Server URL",
+      "placeholder": "https://chat.example.com"
+    },
+    "accounts.*.auth.userId": {
+      "label": "User ID"
+    },
+    "accounts.*.auth.accessToken": {
+      "label": "Access Token",
+      "sensitive": true
+    },
+    "accounts.*.auth.username": {
+      "label": "Username"
+    },
+    "accounts.*.auth.password": {
+      "label": "Password",
+      "sensitive": true
+    },
+    "accounts.*.transport.pollIntervalMs": {
+      "label": "Polling Interval (ms)",
+      "placeholder": "3000"
+    },
+    "accounts.*.transport.reconnectDelayMs": {
+      "label": "Reconnect Delay (ms)",
+      "placeholder": "5000"
+    }
+  }
+}

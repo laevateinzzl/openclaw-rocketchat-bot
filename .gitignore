@@ -1,0 +1,9 @@
+node_modules
+dist
+build
+coverage
+.npm-cache
+.env
+.env.*
+.DS_Store
+*.log

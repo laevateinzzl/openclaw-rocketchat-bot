@@ -1,0 +1,51 @@
+{
+  "name": "rocketchat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rocket.Chat channel plugin for OpenClaw",
+  "type": "module",
+  "main": "build/index.js",
+  "files": [
+    "build",
+    "src",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "debug:client": "npm run build --silent && node --enable-source-maps build/debug-client.js",
+    "debug:poll": "npm run build --silent && node --enable-source-maps build/debug-poll.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "channel": {
+      "id": "rocketchat",
+      "label": "Rocket.Chat",
+      "selectionLabel": "Rocket.Chat",
+      "docsPath": "/channels/rocketchat",
+      "docsLabel": "rocketchat",
+      "blurb": "Rocket.Chat channel plugin with REST polling, WebSocket inbound support, and mention-gated group replies.",
+      "aliases": [
+        "rocket-chat",
+        "rc"
+      ]
+    },
+    "install": {
+      "npmSpec": "rocketchat",
+      "localPath": ".",
+      "defaultChoice": "npm"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "zod": "^3.24.2"
+  }
+}
