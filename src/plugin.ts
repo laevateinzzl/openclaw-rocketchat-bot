@@ -98,7 +98,8 @@ export const rocketchatPlugin = {
 
       const client = new RocketChatClient({
         serverUrl: account.serverUrl,
-        auth: account.auth
+        auth: account.auth,
+        mediaDir: attachmentMediaDir()
       });
       const identity = await client.initialize();
       ctx.setStatus?.("connected");
@@ -236,7 +237,8 @@ export const rocketchatPlugin = {
 
       const client = new RocketChatClient({
         serverUrl: account.serverUrl,
-        auth: account.auth
+        auth: account.auth,
+        mediaDir: attachmentMediaDir()
       });
       await client.initialize();
       const messageId = await client.postMessage(params.to, params.text);
@@ -269,6 +271,16 @@ export function checkpointPathForAccount(
   const getHomeDirectory = options?.homedir ?? homedir;
   const openclawHome = env.OPENCLAW_HOME?.trim() || join(getHomeDirectory(), ".openclaw");
   return join(openclawHome, "rocketchat", `${accountId}.json`);
+}
+
+export function attachmentMediaDir(options?: {
+  env?: Record<string, string | undefined>;
+  homedir?: () => string;
+}): string {
+  const env = options?.env ?? process.env;
+  const getHomeDirectory = options?.homedir ?? homedir;
+  const openclawHome = env.OPENCLAW_HOME?.trim() || join(getHomeDirectory(), ".openclaw");
+  return join(openclawHome, "media");
 }
 
 function formatOutboundPayload(payload: {

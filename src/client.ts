@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { PluginAccountConfig } from "./config.js";
@@ -69,6 +69,7 @@ export type RocketChatMessageRecord = {
 type RocketChatClientOptions = {
   serverUrl: string;
   auth: PluginAccountConfig["auth"];
+  mediaDir?: string;
   fetch?: typeof fetch;
 };
 
@@ -94,12 +95,14 @@ export class RocketChatRateLimitError extends RocketChatClientError {
 export class RocketChatClient {
   private readonly serverUrl: string;
   private readonly auth: PluginAccountConfig["auth"];
+  private readonly mediaDir: string;
   private readonly fetchImpl: typeof fetch;
   private identity: RocketChatIdentity | null = null;
 
   constructor(options: RocketChatClientOptions) {
     this.serverUrl = options.serverUrl.replace(/\/+$/, "");
     this.auth = options.auth;
+    this.mediaDir = options.mediaDir?.trim() || tmpdir();
     this.fetchImpl = options.fetch ?? fetch;
   }
 
@@ -192,9 +195,8 @@ export class RocketChatClient {
       throw new RocketChatClientError(`Rocket.Chat attachment download failed: ${response.statusText}`);
     }
 
-    const mediaRoot = resolveOpenClawMediaDir();
-    await mkdir(mediaRoot, { recursive: true });
-    const tempDir = await mkdtemp(join(mediaRoot, "rocketchat-attachment-"));
+    await mkdir(this.mediaDir, { recursive: true });
+    const tempDir = await mkdtemp(join(this.mediaDir, "rocketchat-attachment-"));
     const filePath = join(tempDir, resolveAttachmentFileName(requestUrl, options?.fileName));
     const bytes = Buffer.from(await response.arrayBuffer());
     await writeFile(filePath, bytes);
@@ -384,11 +386,6 @@ function resolveRequestUrl(url: string, serverUrl: string): string {
   } catch {
     return new URL(url, serverUrl).toString();
   }
-}
-
-function resolveOpenClawMediaDir(): string {
-  const openclawHome = process.env.OPENCLAW_HOME?.trim() || join(homedir(), ".openclaw");
-  return join(openclawHome, "media");
 }
 
 function sanitizeFileName(value: string): string {

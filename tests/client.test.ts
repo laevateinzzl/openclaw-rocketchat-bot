@@ -288,6 +288,7 @@ describe("RocketChatClient", () => {
 
   it("stores downloaded attachments inside the OpenClaw media directory", async () => {
     const openclawHome = await mkdtemp(`${tmpdir()}/openclaw-home-`);
+    const mediaDir = `${openclawHome}/media`;
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -306,7 +307,6 @@ describe("RocketChatClient", () => {
         })
       );
 
-    vi.stubEnv("OPENCLAW_HOME", openclawHome);
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new RocketChatClient({
@@ -315,14 +315,15 @@ describe("RocketChatClient", () => {
         mode: "token",
         userId: "user-1",
         accessToken: "token-1"
-      }
+      },
+      mediaDir
     });
 
     const filePath = await client.downloadAttachmentToTempFile("/file-upload/demo.png", {
       fileName: "demo.png"
     });
 
-    expect(filePath).toContain(`${openclawHome}/media/rocketchat-attachment-`);
+    expect(filePath).toContain(`${mediaDir}/rocketchat-attachment-`);
 
     await rm(openclawHome, { recursive: true, force: true });
   });
