@@ -106,6 +106,14 @@ openclaw config set agents.defaults.pdfMaxBytesMb 32
 openclaw gateway restart
 ```
 
+附件与 checkpoint 的本地路径会跟随 OpenClaw 自身的状态目录解析规则：
+
+- 优先使用 `OPENCLAW_STATE_DIR`
+- 否则如果设置了 `OPENCLAW_HOME`，实际目录会落在 `"$OPENCLAW_HOME/.openclaw"`
+- 否则默认使用 `~/.openclaw`
+
+如果 Linux 服务是通过 `OPENCLAW_HOME=/srv/openclaw` 之类的方式启动，附件可读目录实际应为 `"/srv/openclaw/.openclaw/media"`，不是 `"/srv/openclaw/media"`。
+
 ## 行为说明
 
 - 单聊消息默认接入 OpenClaw

@@ -267,20 +267,33 @@ export function checkpointPathForAccount(
     homedir?: () => string;
   }
 ): string {
-  const env = options?.env ?? process.env;
-  const getHomeDirectory = options?.homedir ?? homedir;
-  const openclawHome = env.OPENCLAW_HOME?.trim() || join(getHomeDirectory(), ".openclaw");
-  return join(openclawHome, "rocketchat", `${accountId}.json`);
+  return join(resolveOpenClawStateDir(options), "rocketchat", `${accountId}.json`);
 }
 
 export function attachmentMediaDir(options?: {
   env?: Record<string, string | undefined>;
   homedir?: () => string;
 }): string {
+  return join(resolveOpenClawStateDir(options), "media");
+}
+
+function resolveOpenClawStateDir(options?: {
+  env?: Record<string, string | undefined>;
+  homedir?: () => string;
+}): string {
   const env = options?.env ?? process.env;
   const getHomeDirectory = options?.homedir ?? homedir;
-  const openclawHome = env.OPENCLAW_HOME?.trim() || join(getHomeDirectory(), ".openclaw");
-  return join(openclawHome, "media");
+  const explicitStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  if (explicitStateDir) {
+    return explicitStateDir;
+  }
+
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    return join(explicitHome, ".openclaw");
+  }
+
+  return join(getHomeDirectory(), ".openclaw");
 }
 
 function formatOutboundPayload(payload: {
