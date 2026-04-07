@@ -5,6 +5,7 @@ import {
   RocketChatClientError,
   RocketChatRateLimitError
 } from "../src/client.js";
+import type { RocketChatMessageRecord } from "../src/client.js";
 
 describe("RocketChatClient", () => {
   afterEach(() => {
@@ -194,6 +195,40 @@ describe("RocketChatClient", () => {
         })
       })
     );
+  });
+
+  it("accepts message attachment payload metadata", () => {
+    const message: RocketChatMessageRecord = {
+      _id: "m-attachment",
+      rid: "room-1",
+      msg: "Please review the attached files.",
+      attachments: [
+        {
+          title: "report.pdf",
+          title_link: "https://chat.example.com/file-upload/report.pdf",
+          type: "application/pdf"
+        }
+      ],
+      file: {
+        _id: "file-1",
+        name: "report.pdf",
+        type: "application/pdf"
+      },
+      files: [
+        {
+          _id: "file-2",
+          name: "clip.mp4",
+          mimetype: "video/mp4"
+        }
+      ]
+    };
+
+    expect(message.attachments?.[0]).toMatchObject({
+      title: "report.pdf",
+      type: "application/pdf"
+    });
+    expect(message.file?.name).toBe("report.pdf");
+    expect(message.files?.[0]?.mimetype).toBe("video/mp4");
   });
 
   it("normalizes api failures", async () => {
