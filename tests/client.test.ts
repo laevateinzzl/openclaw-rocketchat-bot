@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -281,7 +281,7 @@ describe("RocketChatClient", () => {
         })
       })
     );
-    expect(filePath).toMatch(/demo\.mp4$/);
+    expect(filePath).toMatch(/demo---[0-9a-f-]+\.mp4$/);
 
     await rm(openclawHome, { recursive: true, force: true });
   });
@@ -323,7 +323,9 @@ describe("RocketChatClient", () => {
       fileName: "demo.png"
     });
 
-    expect(filePath).toContain(`${mediaDir}/rocketchat-attachment-`);
+    expect(filePath).toContain(`${mediaDir}/inbound/`);
+    expect(filePath).not.toContain("rocketchat-attachment-");
+    await expect(readFile(filePath, "utf8")).resolves.toBe("image-binary");
 
     await rm(openclawHome, { recursive: true, force: true });
   });

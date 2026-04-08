@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import type { PluginAccountConfig } from "./config.js";
 
@@ -195,9 +196,12 @@ export class RocketChatClient {
       throw new RocketChatClientError(`Rocket.Chat attachment download failed: ${response.statusText}`);
     }
 
-    await mkdir(this.mediaDir, { recursive: true });
-    const tempDir = await mkdtemp(join(this.mediaDir, "rocketchat-attachment-"));
-    const filePath = join(tempDir, resolveAttachmentFileName(requestUrl, options?.fileName));
+    const inboundDir = join(this.mediaDir, "inbound");
+    await mkdir(inboundDir, { recursive: true });
+    const filePath = join(
+      inboundDir,
+      buildStoredAttachmentFileName(resolveAttachmentFileName(requestUrl, options?.fileName))
+    );
     const bytes = Buffer.from(await response.arrayBuffer());
     await writeFile(filePath, bytes);
 
@@ -388,6 +392,26 @@ function resolveRequestUrl(url: string, serverUrl: string): string {
   }
 }
 
+function buildStoredAttachmentFileName(fileName: string): string {
+  const parsed = parse(fileName);
+  const baseName = sanitizeFileName(parsed.name);
+  const extension = sanitizeExtension(parsed.ext);
+
+  if (!baseName) {
+    return `${randomUUID()}${extension}`;
+  }
+
+  return `${baseName}---${randomUUID()}${extension}`;
+}
+
 function sanitizeFileName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-") || "attachment";
+}
+
+function sanitizeExtension(value: string): string {
+  if (!value) {
+    return "";
+  }
+
+  return value.replace(/[^a-zA-Z0-9.]+/g, "");
 }
