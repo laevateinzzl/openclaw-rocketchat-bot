@@ -63,7 +63,20 @@ export function inspectAccount(
     : null;
 }
 
+export function listAccountIds(cfg: OpenClawConfig): string[] {
+  return Object.keys(parseChannelConfig(cfg).accounts);
+}
+
+function isConfigured(account: Partial<ResolvedAccount> | null | undefined): boolean {
+  return Boolean(account?.serverUrl && account.auth);
+}
+
 export const rocketchatPlugin = {
+  config: {
+    listAccountIds,
+    resolveAccount,
+    isConfigured
+  },
   id: "rocketchat",
   base: {
     id: "rocketchat",
@@ -114,10 +127,6 @@ export const rocketchatPlugin = {
     }
   }
 };
-
-export function listAccountIds(cfg: OpenClawConfig): string[] {
-  return Object.keys(parseChannelConfig(cfg).accounts);
-}
 
 export async function startGateway(ctx: GatewayContext): Promise<void> {
   const account =

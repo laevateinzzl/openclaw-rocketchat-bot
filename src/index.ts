@@ -1,4 +1,4 @@
-import { rocketchatPlugin, startGateway } from "./plugin.js";
+import { rocketchatPlugin, startGateway, listAccountIds, resolveAccount } from "./plugin.js";
 
 type GatewayApi = {
   registerGatewayMethod(name: string, handler: (ctx: unknown) => Promise<void>): void;
@@ -10,7 +10,17 @@ export default {
   name: "Rocket.Chat",
   description:
     "Rocket.Chat channel plugin with REST polling, WebSocket inbound support, and mention-gated group replies.",
+
   plugin: rocketchatPlugin,
+
+  config: {
+    listAccountIds,
+    resolveAccount,
+    isConfigured(account: unknown) {
+      const a = account as { serverUrl?: string; auth?: unknown } | null | undefined;
+      return Boolean(a?.serverUrl && a.auth);
+    }
+  },
 
   register(api: GatewayApi) {
     api.registerChannel?.({ plugin: rocketchatPlugin });

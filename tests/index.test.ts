@@ -13,6 +13,10 @@ describe("plugin entry", () => {
     expect(typeof plugin.register).toBe("function");
     expect(typeof plugin.activate).toBe("function");
     expect(typeof plugin.registerFull).toBe("function");
+    expect(plugin.config).toBeTruthy();
+    expect(typeof plugin.config.listAccountIds).toBe("function");
+    expect(typeof plugin.config.resolveAccount).toBe("function");
+    expect(typeof plugin.config.isConfigured).toBe("function");
   });
 
   it("uses the same top-level plugin id as the manifest and channel id", () => {
