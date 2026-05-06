@@ -11,87 +11,96 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean" },
-          "serverUrl": { "type": "string", "minLength": 1 },
-          "auth": {
+          "accounts": {
             "type": "object",
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "mode": { "const": "token" },
-                  "userId": { "type": "string", "minLength": 1 },
-                  "accessToken": { "type": "string", "minLength": 1 }
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "serverUrl": { "type": "string", "minLength": 1 },
+                "auth": {
+                  "type": "object",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "mode": { "const": "token" },
+                        "userId": { "type": "string", "minLength": 1 },
+                        "accessToken": { "type": "string", "minLength": 1 }
+                      },
+                      "required": ["mode", "userId", "accessToken"]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "mode": { "const": "password" },
+                        "username": { "type": "string", "minLength": 1 },
+                        "password": { "type": "string", "minLength": 1 }
+                      },
+                      "required": ["mode", "username", "password"]
+                    }
+                  ]
                 },
-                "required": ["mode", "userId", "accessToken"]
+                "transport": {
+                  "type": "object",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "mode": { "const": "polling" },
+                        "pollIntervalMs": { "type": "integer", "minimum": 1000 }
+                      },
+                      "required": ["mode"]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "mode": { "const": "websocket" },
+                        "reconnectDelayMs": { "type": "integer", "minimum": 1000 }
+                      },
+                      "required": ["mode"]
+                    }
+                  ]
+                },
+                "mentionNames": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 }
+                }
               },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "mode": { "const": "password" },
-                  "username": { "type": "string", "minLength": 1 },
-                  "password": { "type": "string", "minLength": 1 }
-                },
-                "required": ["mode", "username", "password"]
-              }
-            ]
-          },
-          "transport": {
-            "type": "object",
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "mode": { "const": "polling" },
-                  "pollIntervalMs": { "type": "integer", "minimum": 1000 }
-                },
-                "required": ["mode"]
-              },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "mode": { "const": "websocket" },
-                  "reconnectDelayMs": { "type": "integer", "minimum": 1000 }
-                },
-                "required": ["mode"]
-              }
-            ]
-          },
-          "mentionNames": {
-            "type": "array",
-            "items": { "type": "string", "minLength": 1 }
+              "required": ["enabled", "serverUrl", "auth"]
+            }
           }
-        },
-        "required": ["enabled", "serverUrl", "auth"]
+        }
       },
       "uiHints": {
-        "serverUrl": {
+        "accounts.*.serverUrl": {
           "label": "Server URL",
           "placeholder": "https://chat.example.com"
         },
-        "auth.userId": {
+        "accounts.*.auth.userId": {
           "label": "User ID"
         },
-        "auth.accessToken": {
+        "accounts.*.auth.accessToken": {
           "label": "Access Token",
           "sensitive": true
         },
-        "auth.username": {
+        "accounts.*.auth.username": {
           "label": "Username"
         },
-        "auth.password": {
+        "accounts.*.auth.password": {
           "label": "Password",
           "sensitive": true
         },
-        "transport.pollIntervalMs": {
+        "accounts.*.transport.pollIntervalMs": {
           "label": "Polling Interval (ms)",
           "placeholder": "3000"
         },
-        "transport.reconnectDelayMs": {
+        "accounts.*.transport.reconnectDelayMs": {
           "label": "Reconnect Delay (ms)",
           "placeholder": "5000"
         }
