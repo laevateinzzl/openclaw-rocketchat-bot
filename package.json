@@ -35,6 +35,7 @@
     "extensions": [
       "./src/index.ts"
     ],
+    "setupEntry": "./src/setup-entry.ts",
     "channel": {
       "id": "rocketchat",
       "label": "Rocket.Chat",

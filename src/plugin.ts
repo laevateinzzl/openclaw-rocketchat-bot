@@ -1,6 +1,9 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { ChannelPluginBaseConfig } from "openclaw/plugin-sdk/channel-core";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/channel-core";
+
 import { FileCheckpointStore } from "./checkpoints.js";
 import { sendReplyLifecycle, shouldHandleInboundEvent } from "./channel.js";
 import { RocketChatClient } from "./client.js";
@@ -15,11 +18,11 @@ import {
   type OpenClawConfigLike
 } from "./inbound-dispatch.js";
 
-type ResolvedAccount = PluginAccountConfig & {
+export type ResolvedAccount = PluginAccountConfig & {
   accountId: string;
 };
 
-type OpenClawConfig = {
+export type OpenClawConfig = {
   session?: {
     store?: string;
   };
@@ -28,246 +31,208 @@ type OpenClawConfig = {
   };
 };
 
-type PluginApi = {
-  registerChannel(args: { plugin: unknown }): void;
+type GatewayContext = {
+  accountId: string;
+  account?: ResolvedAccount;
+  cfg?: OpenClawConfig;
+  abortSignal?: AbortSignal;
+  channelRuntime?: ChannelRuntimeLike;
+  setStatus?: (status: string) => void;
 };
 
-type RuntimeReplyHandler = {
-  handleInboundMessage?: (payload: {
-    channel: string;
-    accountId: string;
-    senderId: string;
-    senderName: string;
-    chatType: "direct" | "group" | "channel";
-    chatId: string;
-    text: string;
-    raw: unknown;
-    mentions: string[];
-    attachments: InboundAttachment[];
-    reply: (responseText: string) => Promise<void>;
-  }) => Promise<void>;
-};
+export function resolveAccount(
+  cfg: unknown,
+  accountId?: string
+): ResolvedAccount | null {
+  const accounts = parseChannelConfig(cfg as OpenClawConfig).accounts;
+  if (!accountId) return null;
+  const account = accounts[accountId];
+  return account ? { ...account, accountId } : null;
+}
 
-export const rocketchatPlugin = {
-  id: "rocketchat",
-  meta: {
-    id: "rocketchat",
-    label: "Rocket.Chat",
-    selectionLabel: "Rocket.Chat (REST Polling)",
-    docsPath: "/channels/rocketchat",
-    docsLabel: "rocketchat",
-    blurb: "Rocket.Chat channel plugin with REST polling and mention-gated group replies.",
-    aliases: ["rocket-chat", "rc"]
-  },
-  capabilities: {
-    chatTypes: ["direct", "group", "channel"],
-    media: false,
-    threads: false
-  },
-  config: {
-    listAccountIds(cfg: OpenClawConfig): string[] {
-      return Object.keys(parseChannelConfig(cfg).accounts);
-    },
-    resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedAccount | null {
-      const account = parseChannelConfig(cfg).accounts[accountId];
-      return account ? { ...account, accountId } : null;
-    },
-    isConfigured(account: Partial<ResolvedAccount> | null | undefined): boolean {
-      return Boolean(account?.serverUrl && account.auth);
-    }
-  },
-  gateway: {
-    async startAccount(ctx: {
-      accountId: string;
-      account?: ResolvedAccount;
-      cfg?: OpenClawConfig;
-      abortSignal?: AbortSignal;
-      runtime?: {
-        channel?: {
-          reply?: RuntimeReplyHandler;
-        };
-      };
-      channelRuntime?: ChannelRuntimeLike;
-      setStatus?: (status: string) => void;
-    }): Promise<void> {
-      const account = ctx.account ?? rocketchatPlugin.config.resolveAccount(ctx.cfg ?? {}, ctx.accountId);
-      if (!account || !account.enabled) {
-        ctx.setStatus?.("disabled");
-        return;
-      }
-
-      const client = new RocketChatClient({
+export function inspectAccount(
+  cfg: unknown,
+  accountId?: string
+): { accountId: string; enabled: boolean; serverUrl: string; transportMode: string } | null {
+  if (!accountId) return null;
+  const account = parseChannelConfig(cfg as OpenClawConfig).accounts[accountId];
+  return account
+    ? {
+        accountId,
+        enabled: account.enabled,
         serverUrl: account.serverUrl,
-        auth: account.auth,
-        mediaDir: attachmentMediaDir()
-      });
-      const identity = await client.initialize();
-      ctx.setStatus?.("connected");
-
-      const checkpointStore = new FileCheckpointStore(checkpointPathForAccount(account.accountId), 250);
-      const fatalError = createDeferred<void>();
-      let warnedAboutMissingRuntime = false;
-      const transport = createInboundTransport({
-        account,
-        identity,
-        client,
-        checkpointStore,
-        onDisconnect: async (error) => {
-          fatalError.reject(asError(error));
-        },
-        onError: async (error) => {
-          console.warn(
-            `[rocketchat:${account.accountId}] inbound error: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        },
-        onEvent: async (event) => {
-          const mentionNames = dedupeMentions([identity.username, ...account.mentionNames]);
-          if (
-            !shouldHandleInboundEvent(event, {
-              botUserId: identity.userId,
-              mentionNames
-            })
-          ) {
-            return;
-          }
-
-          if (ctx.channelRuntime) {
-            const channelRuntime = ctx.channelRuntime;
-            await sendReplyLifecycle({
-              client,
-              roomId: event.roomId,
-              run: async (session) => {
-                await dispatchInboundEventWithChannelRuntime({
-                  cfg: (ctx.cfg ?? {}) as OpenClawConfigLike,
-                  accountId: account.accountId,
-                  event,
-                  channelRuntime,
-                  attachmentClient: client,
-                  deliver: async (payload, info) => {
-                    await session.update({
-                      kind: info.kind,
-                      payload
-                    });
-                  },
-                  onRecordError: (error) => {
-                    console.warn(
-                      `[rocketchat:${account.accountId}] failed to record inbound session: ${
-                        error instanceof Error ? error.message : String(error)
-                      }`
-                    );
-                  },
-                  onDispatchError: (error, info) => {
-                    console.warn(
-                      `[rocketchat:${account.accountId}] ${info.kind} dispatch failed: ${
-                        error instanceof Error ? error.message : String(error)
-                      }`
-                    );
-                  }
-                });
-              }
-            });
-            return;
-          }
-
-          const handleInboundMessage = ctx.runtime?.channel?.reply?.handleInboundMessage;
-          if (typeof handleInboundMessage !== "function") {
-            if (!warnedAboutMissingRuntime) {
-              warnedAboutMissingRuntime = true;
-              console.warn(
-                `[rocketchat:${account.accountId}] channel runtime is unavailable; inbound messages will be ignored`
-              );
-            }
-            return;
-          }
-
-          await handleInboundMessage({
-            channel: "rocketchat",
-            accountId: account.accountId,
-            senderId: event.senderId,
-            senderName: event.senderName,
-            chatType: event.roomType,
-            chatId: event.roomId,
-            text: event.text,
-            raw: event.raw,
-            mentions: event.mentions,
-            attachments: event.attachments,
-            reply: async (responseText: string) => {
-              await sendReplyLifecycle({
-                client,
-                roomId: event.roomId,
-                finalText: responseText
-              });
-            }
-          });
-        }
-      });
-
-      if (account.transport.mode === "polling" && hasSafePollOnce(transport)) {
-        await transport.safePollOnce();
+        transportMode: account.transport.mode
       }
+    : null;
+}
 
-      await transport.start();
-
-      if (!ctx.abortSignal) {
-        return;
-      }
-
-      try {
-        await Promise.race([waitForAbort(ctx.abortSignal), fatalError.promise]);
-      } finally {
-        await transport.stop();
-        ctx.setStatus?.("stopped");
-      }
+export const rocketchatPlugin = createChannelPluginBase<ResolvedAccount>({
+  base: {
+    id: "rocketchat",
+    setup: {
+      resolveAccount,
+      inspectAccount
     }
+  },
+  security: {
+    dm: {
+      channelKey: "rocketchat",
+      resolvePolicy() {
+        return "allowlist";
+      },
+      resolveAllowFrom() {
+        return [];
+      },
+      defaultPolicy: "allowlist"
+    }
+  },
+  threading: {
+    topLevelReplyToMode: "reply"
   },
   outbound: {
     deliveryMode: "direct",
-    async sendText(params: {
-      cfg?: OpenClawConfig;
-      accountId: string;
-      to: string;
-      text: string;
-    }): Promise<{ ok: true; messageId: string }> {
-      const account = rocketchatPlugin.config.resolveAccount(params.cfg ?? {}, params.accountId);
-      if (!account) {
-        throw new Error(`Unknown Rocket.Chat account: ${params.accountId}`);
+    attachedResults: {
+      async sendText(params: {
+        cfg?: unknown;
+        accountId: string;
+        to: string;
+        text: string;
+      }): Promise<{ ok: boolean; messageId: string }> {
+        const account = resolveAccount(params.cfg ?? {}, params.accountId);
+        if (!account) {
+          throw new Error(`Unknown Rocket.Chat account: ${params.accountId}`);
+        }
+
+        const client = new RocketChatClient({
+          serverUrl: account.serverUrl,
+          auth: account.auth,
+          mediaDir: attachmentMediaDir()
+        });
+        await client.initialize();
+        const messageId = await client.postMessage(params.to, params.text);
+
+        return { ok: true, messageId };
       }
-
-      const client = new RocketChatClient({
-        serverUrl: account.serverUrl,
-        auth: account.auth,
-        mediaDir: attachmentMediaDir()
-      });
-      await client.initialize();
-      const messageId = await client.postMessage(params.to, params.text);
-
-      return {
-        ok: true,
-        messageId
-      };
     }
   }
-};
+});
 
-export function registerRockeChatPlugin(api: PluginApi): void {
-  api.registerChannel({ plugin: rocketchatPlugin });
+export function listAccountIds(cfg: OpenClawConfig): string[] {
+  return Object.keys(parseChannelConfig(cfg).accounts);
 }
 
-function parseChannelConfig(cfg: OpenClawConfig): ReturnType<typeof parsePluginConfig> {
-  const nestedConfig = cfg.channels?.rocketchat;
-  if (nestedConfig) {
-    return parsePluginConfig(nestedConfig);
+export async function startGateway(ctx: GatewayContext): Promise<void> {
+  const account =
+    ctx.account ?? resolveAccount(ctx.cfg ?? {}, ctx.accountId);
+  if (!account || !account.enabled) {
+    ctx.setStatus?.("disabled");
+    return;
   }
 
-  if (isPluginConfigLike(cfg)) {
-    return parsePluginConfig(cfg);
+  const client = new RocketChatClient({
+    serverUrl: account.serverUrl,
+    auth: account.auth,
+    mediaDir: attachmentMediaDir()
+  });
+  const identity = await client.initialize();
+  ctx.setStatus?.("connected");
+
+  const checkpointStore = new FileCheckpointStore(
+    checkpointPathForAccount(account.accountId),
+    250
+  );
+  const fatalError = createDeferred<void>();
+  let warnedAboutMissingRuntime = false;
+
+  const transport = createInboundTransport({
+    account,
+    identity,
+    client,
+    checkpointStore,
+    onDisconnect: async (error) => {
+      fatalError.reject(asError(error));
+    },
+    onError: async (error) => {
+      console.warn(
+        `[rocketchat:${account.accountId}] inbound error: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    },
+    onEvent: async (event) => {
+      const mentionNames = dedupeMentions([identity.username, ...account.mentionNames]);
+      if (
+        !shouldHandleInboundEvent(event, {
+          botUserId: identity.userId,
+          mentionNames
+        })
+      ) {
+        return;
+      }
+
+      if (ctx.channelRuntime) {
+        const channelRuntime = ctx.channelRuntime;
+        await sendReplyLifecycle({
+          client,
+          roomId: event.roomId,
+          run: async (session) => {
+            await dispatchInboundEventWithChannelRuntime({
+              cfg: (ctx.cfg ?? {}) as OpenClawConfigLike,
+              accountId: account.accountId,
+              event,
+              channelRuntime,
+              attachmentClient: client,
+              deliver: async (payload, info) => {
+                await session.update({
+                  kind: info.kind,
+                  payload
+                });
+              },
+              onRecordError: (error) => {
+                console.warn(
+                  `[rocketchat:${account.accountId}] failed to record inbound session: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`
+                );
+              },
+              onDispatchError: (error, info) => {
+                console.warn(
+                  `[rocketchat:${account.accountId}] ${info.kind} dispatch failed: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`
+                );
+              }
+            });
+          }
+        });
+        return;
+      }
+
+      if (!warnedAboutMissingRuntime) {
+        warnedAboutMissingRuntime = true;
+        console.warn(
+          `[rocketchat:${account.accountId}] channel runtime is unavailable; inbound messages will be ignored`
+        );
+      }
+    }
+  });
+
+  if (account.transport.mode === "polling" && hasSafePollOnce(transport)) {
+    await transport.safePollOnce();
   }
 
-  return {
-    accounts: {}
-  };
+  await transport.start();
+
+  if (!ctx.abortSignal) {
+    return;
+  }
+
+  try {
+    await Promise.race([waitForAbort(ctx.abortSignal), fatalError.promise]);
+  } finally {
+    await transport.stop();
+    ctx.setStatus?.("stopped");
+  }
 }
 
 export function checkpointPathForAccount(
@@ -287,6 +252,19 @@ export function attachmentMediaDir(options?: {
   return join(resolveOpenClawStateDir(options), "media");
 }
 
+function parseChannelConfig(cfg: OpenClawConfig): ReturnType<typeof parsePluginConfig> {
+  const nestedConfig = cfg.channels?.rocketchat;
+  if (nestedConfig) {
+    return parsePluginConfig(nestedConfig);
+  }
+
+  if (isPluginConfigLike(cfg)) {
+    return parsePluginConfig(cfg);
+  }
+
+  return { accounts: {} };
+}
+
 function resolveOpenClawStateDir(options?: {
   env?: Record<string, string | undefined>;
   homedir?: () => string;
@@ -304,28 +282,6 @@ function resolveOpenClawStateDir(options?: {
   }
 
   return join(getHomeDirectory(), ".openclaw");
-}
-
-function formatOutboundPayload(payload: {
-  text?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-}): string {
-  const parts: string[] = [];
-  const text = payload.text?.trim();
-  if (text) {
-    parts.push(text);
-  }
-
-  const mediaUrls = [
-    ...(payload.mediaUrls ?? []),
-    ...(payload.mediaUrl ? [payload.mediaUrl] : [])
-  ].filter((value) => value.trim().length > 0);
-  if (mediaUrls.length > 0) {
-    parts.push(mediaUrls.join("\n"));
-  }
-
-  return parts.join("\n\n").trim();
 }
 
 function dedupeMentions(mentions: string[]): string[] {
@@ -383,9 +339,7 @@ async function waitForAbort(abortSignal: AbortSignal): Promise<void> {
   }
 
   await new Promise<void>((resolve) => {
-    abortSignal.addEventListener("abort", () => resolve(), {
-      once: true
-    });
+    abortSignal.addEventListener("abort", () => resolve(), { once: true });
   });
 }
 
@@ -395,28 +349,18 @@ function createDeferred<T>() {
   let rejectPromise: (reason?: unknown) => void = () => undefined;
   const promise = new Promise<T>((resolve, reject) => {
     resolvePromise = (value) => {
-      if (settled) {
-        return;
-      }
-
+      if (settled) return;
       settled = true;
       resolve(value);
     };
     rejectPromise = (reason) => {
-      if (settled) {
-        return;
-      }
-
+      if (settled) return;
       settled = true;
       reject(reason);
     };
   });
 
-  return {
-    promise,
-    resolve: resolvePromise,
-    reject: rejectPromise
-  };
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
 function asError(error: unknown): Error {

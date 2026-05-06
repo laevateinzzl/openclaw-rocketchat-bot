@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { attachmentMediaDir, checkpointPathForAccount, rocketchatPlugin } from "../src/plugin.js";
+import {
+  attachmentMediaDir,
+  checkpointPathForAccount,
+  listAccountIds,
+  resolveAccount,
+  rocketchatPlugin
+} from "../src/plugin.js";
 
 describe("checkpointPathForAccount", () => {
   it("uses OPENCLAW_HOME when provided", () => {
@@ -70,18 +76,16 @@ describe("attachmentMediaDir", () => {
   });
 });
 
-describe("rocketchatPlugin.config", () => {
+describe("rocketchatPlugin account resolution", () => {
   it("returns an empty account list when the root config has no Rocket.Chat section", () => {
     const rootConfig = {
       meta: {
         envFilePath: "/home/tester/.openclaw/.env"
       },
       channels: {}
-    } as unknown as Parameters<typeof rocketchatPlugin.config.listAccountIds>[0];
+    };
 
-    expect(
-      rocketchatPlugin.config.listAccountIds(rootConfig)
-    ).toEqual([]);
+    expect(listAccountIds(rootConfig)).toEqual([]);
   });
 
   it("reads account ids from channels.rocketchat when the full OpenClaw config is provided", () => {
@@ -104,11 +108,9 @@ describe("rocketchatPlugin.config", () => {
           }
         }
       }
-    } as unknown as Parameters<typeof rocketchatPlugin.config.listAccountIds>[0];
+    };
 
-    expect(
-      rocketchatPlugin.config.listAccountIds(rootConfig)
-    ).toEqual(["main"]);
+    expect(listAccountIds(rootConfig)).toEqual(["main"]);
   });
 
   it("returns null when resolving an account from a root config without Rocket.Chat settings", () => {
@@ -117,10 +119,8 @@ describe("rocketchatPlugin.config", () => {
         envFilePath: "/home/tester/.openclaw/.env"
       },
       channels: {}
-    } as unknown as Parameters<typeof rocketchatPlugin.config.resolveAccount>[0];
+    };
 
-    expect(
-      rocketchatPlugin.config.resolveAccount(rootConfig, "main")
-    ).toBeNull();
+    expect(resolveAccount(rootConfig, "main")).toBeNull();
   });
 });

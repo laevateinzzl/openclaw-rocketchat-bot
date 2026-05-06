@@ -1,11 +1,15 @@
-import { registerRockeChatPlugin } from "./plugin.js";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+import { rocketchatPlugin, startGateway } from "./plugin.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "rocketchat",
-  name: "OpenClaw Rocket.Chat Plugin",
-  register(api: { registerChannel(args: { plugin: unknown }): void }) {
-    registerRockeChatPlugin(api);
+  name: "Rocket.Chat",
+  description:
+    "Rocket.Chat channel plugin with REST polling, WebSocket inbound support, and mention-gated group replies.",
+  plugin: rocketchatPlugin,
+  registerFull(api) {
+    api.registerGatewayMethod("rocketchat.gateway.startAccount", (ctx) => {
+      return startGateway(ctx as Parameters<typeof startGateway>[0]);
+    });
   }
-};
-
-export default plugin;
+});
