@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, parse } from "node:path";
+import { basename, join, parse } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { PluginAccountConfig } from "./config.js";
@@ -223,6 +223,35 @@ export class RocketChatClient {
     await writeFile(filePath, bytes);
 
     return filePath;
+  }
+
+  async uploadAttachment(roomId: string, filePath: string, text?: string): Promise<string> {
+    await this.initialize();
+
+    const fileName = basename(filePath);
+    const fileBytes = await readFile(filePath);
+    const formData = new FormData();
+    if (text?.trim()) {
+      formData.append("msg", text.trim());
+    }
+    formData.append("file", new Blob([fileBytes]), fileName);
+
+    const response = await this.fetchImpl(
+      new URL(`/api/v1/rooms.upload/${encodeURIComponent(roomId)}`, this.serverUrl).toString(),
+      {
+        method: "POST",
+        headers: this.authHeaders(),
+        body: formData
+      }
+    );
+
+    if (!response.ok) {
+      throw new RocketChatClientError(`Rocket.Chat attachment upload failed: ${response.statusText}`);
+    }
+
+    const payload = await this.parseJsonResponse(response);
+    const message = asObject(payload.message);
+    return getString(message, "_id");
   }
 
   private async loginWithPassword(): Promise<RocketChatIdentity> {

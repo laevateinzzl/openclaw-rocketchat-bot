@@ -1,5 +1,6 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -328,6 +329,87 @@ describe("RocketChatClient", () => {
     await expect(readFile(filePath, "utf8")).resolves.toBe("image-binary");
 
     await rm(openclawHome, { recursive: true, force: true });
+  });
+
+  it("uploads a local file attachment to Rocket.Chat", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "rocketchat-upload-"));
+    const filePath = join(tempDir, "result.zip");
+    await writeFile(filePath, Buffer.from("demo"));
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "success",
+          data: {
+            userId: "bot-1",
+            authToken: "token-1",
+            me: { username: "bot" }
+          }
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: { _id: "m-attachment" } }));
+
+    const client = new RocketChatClient({
+      serverUrl: "https://chat.example.com",
+      auth: { mode: "password", username: "bot", password: "secret" },
+      mediaDir: tempDir,
+      fetch: fetchMock
+    });
+
+    const messageId = await client.uploadAttachment("room-1", filePath, "结果附件");
+
+    expect(messageId).toBe("m-attachment");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://chat.example.com/api/v1/rooms.upload/room-1",
+      expect.objectContaining({ method: "POST" })
+    );
+
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("throws when uploading a missing local file", async () => {
+    const client = new RocketChatClient({
+      serverUrl: "https://chat.example.com",
+      auth: { mode: "token", userId: "bot-1", accessToken: "token-1" },
+      mediaDir: "/tmp"
+    });
+
+    await expect(client.uploadAttachment("room-1", "/tmp/missing.zip")).rejects.toThrow();
+  });
+
+  it("throws RocketChatClientError when attachment upload fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "rocketchat-upload-"));
+    const filePath = join(tempDir, "result.zip");
+    await writeFile(filePath, Buffer.from("demo"));
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "success",
+          data: {
+            userId: "bot-1",
+            authToken: "token-1",
+            me: { username: "bot" }
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("upload failed", { status: 500, statusText: "Internal Server Error" })
+      );
+
+    const client = new RocketChatClient({
+      serverUrl: "https://chat.example.com",
+      auth: { mode: "password", username: "bot", password: "secret" },
+      mediaDir: tempDir,
+      fetch: fetchMock
+    });
+
+    await expect(client.uploadAttachment("room-1", filePath)).rejects.toThrow(RocketChatClientError);
+
+    await rm(tempDir, { recursive: true, force: true });
   });
 
   it("normalizes api failures", async () => {

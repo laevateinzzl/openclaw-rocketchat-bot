@@ -188,4 +188,89 @@ describe("sendReplyLifecycle", () => {
       "未生成可发送的回复。"
     );
   });
+
+  it("uploads a final attachment after updating the placeholder message", async () => {
+    const postMessage = vi.fn().mockResolvedValue("placeholder-1");
+    const updateMessage = vi.fn().mockResolvedValue(undefined);
+    const uploadAttachment = vi.fn().mockResolvedValue("attachment-1");
+
+    await sendReplyLifecycle({
+      client: {
+        postMessage,
+        updateMessage,
+        uploadAttachment
+      },
+      roomId: "room-1",
+      run: async (session) => {
+        await session.update({
+          kind: "final",
+          payload: {
+            text: "结果已生成",
+            attachmentPath: "/tmp/result.zip"
+          }
+        });
+      }
+    });
+
+    expect(updateMessage).toHaveBeenCalledWith("room-1", "placeholder-1", "结果已生成");
+    expect(uploadAttachment).toHaveBeenCalledWith("room-1", "/tmp/result.zip", "结果已生成");
+  });
+
+  it("ignores attachmentPath on non-final stages", async () => {
+    const uploadAttachment = vi.fn().mockResolvedValue("attachment-1");
+
+    await sendReplyLifecycle({
+      client: {
+        postMessage: vi.fn().mockResolvedValue("placeholder-1"),
+        updateMessage: vi.fn().mockResolvedValue(undefined),
+        uploadAttachment
+      },
+      roomId: "room-1",
+      run: async (session) => {
+        await session.update({
+          kind: "block",
+          payload: {
+            text: "处理中",
+            attachmentPath: "/tmp/result.zip"
+          }
+        });
+        await session.update({
+          kind: "final",
+          payload: {
+            text: "完成"
+          }
+        });
+      }
+    });
+
+    expect(uploadAttachment).not.toHaveBeenCalled();
+  });
+
+  it("propagates upload errors after final text update", async () => {
+    const error = new Error("upload failed");
+    const updateMessage = vi.fn().mockResolvedValue(undefined);
+    const uploadAttachment = vi.fn().mockRejectedValue(error);
+
+    await expect(
+      sendReplyLifecycle({
+        client: {
+          postMessage: vi.fn().mockResolvedValue("placeholder-1"),
+          updateMessage,
+          uploadAttachment
+        },
+        roomId: "room-1",
+        run: async (session) => {
+          await session.update({
+            kind: "final",
+            payload: {
+              text: "最终结果",
+              attachmentPath: "/tmp/result.zip"
+            }
+          });
+        }
+      })
+    ).rejects.toThrow("upload failed");
+
+    expect(updateMessage).toHaveBeenCalledWith("room-1", "placeholder-1", "最终结果");
+  });
 });

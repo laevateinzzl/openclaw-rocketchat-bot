@@ -9,6 +9,7 @@ type ChannelRuleOptions = {
 type ReplyClient = {
   postMessage(roomId: string, text: string): Promise<string>;
   updateMessage(roomId: string, messageId: string, text: string): Promise<void>;
+  uploadAttachment?(roomId: string, filePath: string, text?: string): Promise<string>;
 };
 
 type SendReplyLifecycleOptions = {
@@ -31,6 +32,7 @@ type ReplyStagePayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  attachmentPath?: string;
 };
 
 type ReplySession = {
@@ -107,6 +109,9 @@ async function createReplySession(client: ReplyClient, roomId: string): Promise<
         finalUpdated = true;
       }
       await client.updateMessage(roomId, messageId, formatReplyUpdate(kind, payload));
+      if (kind === "final" && payload.attachmentPath && client.uploadAttachment) {
+        await client.uploadAttachment(roomId, payload.attachmentPath, payload.text?.trim() || undefined);
+      }
     },
     hasFinalUpdate: () => finalUpdated,
     fail: async (_error) => {
