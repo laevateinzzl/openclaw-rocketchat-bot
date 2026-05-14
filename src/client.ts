@@ -236,8 +236,8 @@ export class RocketChatClient {
     }
     formData.append("file", new Blob([fileBytes]), fileName);
 
-    const response = await this.fetchImpl(
-      new URL(`/api/v1/rooms.upload/${encodeURIComponent(roomId)}`, this.serverUrl).toString(),
+    const uploadResponse = await this.fetchImpl(
+      new URL(`/api/v1/rooms.media/${encodeURIComponent(roomId)}`, this.serverUrl).toString(),
       {
         method: "POST",
         headers: this.authHeaders(),
@@ -245,13 +245,41 @@ export class RocketChatClient {
       }
     );
 
-    if (!response.ok) {
-      throw new RocketChatClientError(`Rocket.Chat attachment upload failed: ${response.statusText}`);
+    if (!uploadResponse.ok) {
+      throw new RocketChatClientError(`Rocket.Chat attachment upload failed: ${uploadResponse.statusText}`);
     }
 
-    const payload = await this.parseJsonResponse(response);
-    const message = asObject(payload.message);
-    return getString(message, "_id");
+    const uploadPayload = await this.parseJsonResponse(uploadResponse);
+    const file = asOptionalObject(uploadPayload.file);
+    if (!file) {
+      throw new RocketChatClientError("Rocket.Chat attachment upload response missing file id");
+    }
+
+    const fileId = getString(file, "_id");
+    const confirmResponse = await this.fetchImpl(
+      new URL(
+        `/api/v1/rooms.mediaConfirm/${encodeURIComponent(roomId)}/${encodeURIComponent(fileId)}`,
+        this.serverUrl
+      ).toString(),
+      {
+        method: "POST",
+        headers: this.authHeaders()
+      }
+    );
+
+    if (!confirmResponse.ok) {
+      throw new RocketChatClientError(
+        `Rocket.Chat attachment confirm failed: ${confirmResponse.statusText}`
+      );
+    }
+
+    const confirmPayload = await this.parseJsonResponse(confirmResponse);
+    const message = asOptionalObject(confirmPayload.message);
+    if (message) {
+      return getString(message, "_id");
+    }
+
+    throw new RocketChatClientError("Rocket.Chat attachment confirm response missing message id");
   }
 
   private async loginWithPassword(): Promise<RocketChatIdentity> {
@@ -362,6 +390,14 @@ function asObject(value: unknown): JsonObject {
   }
 
   throw new RocketChatClientError("Rocket.Chat API returned an invalid payload");
+}
+
+function asOptionalObject(value: unknown): JsonObject | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as JsonObject;
+  }
+
+  return null;
 }
 
 function getString(object: JsonObject, key: string): string {

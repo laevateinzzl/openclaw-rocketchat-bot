@@ -348,6 +348,7 @@ describe("RocketChatClient", () => {
           }
         })
       )
+      .mockResolvedValueOnce(jsonResponse({ success: true, file: { _id: "f-uploaded" } }))
       .mockResolvedValueOnce(jsonResponse({ success: true, message: { _id: "m-attachment" } }));
 
     const client = new RocketChatClient({
@@ -357,12 +358,17 @@ describe("RocketChatClient", () => {
       fetch: fetchMock
     });
 
-    const messageId = await client.uploadAttachment("room-1", filePath, "结果附件");
+    const attachmentId = await client.uploadAttachment("room-1", filePath, "结果附件");
 
-    expect(messageId).toBe("m-attachment");
+    expect(attachmentId).toBe("m-attachment");
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "https://chat.example.com/api/v1/rooms.upload/room-1",
+      "https://chat.example.com/api/v1/rooms.media/room-1",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "https://chat.example.com/api/v1/rooms.mediaConfirm/room-1/f-uploaded",
       expect.objectContaining({ method: "POST" })
     );
 
@@ -398,6 +404,40 @@ describe("RocketChatClient", () => {
       )
       .mockResolvedValueOnce(
         new Response("upload failed", { status: 500, statusText: "Internal Server Error" })
+      );
+
+    const client = new RocketChatClient({
+      serverUrl: "https://chat.example.com",
+      auth: { mode: "password", username: "bot", password: "secret" },
+      mediaDir: tempDir,
+      fetch: fetchMock
+    });
+
+    await expect(client.uploadAttachment("room-1", filePath)).rejects.toThrow(RocketChatClientError);
+
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("throws RocketChatClientError when media confirm fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "rocketchat-upload-"));
+    const filePath = join(tempDir, "result.zip");
+    await writeFile(filePath, Buffer.from("demo"));
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "success",
+          data: {
+            userId: "bot-1",
+            authToken: "token-1",
+            me: { username: "bot" }
+          }
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, file: { _id: "f-only" } }))
+      .mockResolvedValueOnce(
+        new Response("confirm failed", { status: 500, statusText: "Internal Server Error" })
       );
 
     const client = new RocketChatClient({
