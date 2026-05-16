@@ -103,6 +103,35 @@ export const rocketchatPlugin = {
   threading: {
     topLevelReplyToMode: "reply" as const
   },
+  messaging: {
+    targetPrefixes: ["rocketchat", "channel", "user", "@"],
+    normalizeTarget: (target: string): string | undefined => {
+      const trimmed = target?.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      // `rocketchat:<roomId>` / `channel:<roomId>` / `user:<userId>` -> raw id
+      return trimmed.replace(/^rocketchat:(?:channel:|user:)?/i, "").replace(/^channel:/i, "");
+    },
+    targetResolver: {
+      looksLikeId: (id: string): boolean => {
+        const trimmed = id?.trim();
+        if (!trimmed) {
+          return false;
+        }
+        // Mongo ObjectId-style (24 hex) or 17-char base62 Rocket.Chat ids,
+        // plus prefixed forms we accept above.
+        return (
+          /^[a-z0-9]{8,32}$/i.test(trimmed) ||
+          /^rocketchat:/i.test(trimmed) ||
+          /^channel:/i.test(trimmed) ||
+          /^user:/i.test(trimmed) ||
+          /^@/.test(trimmed)
+        );
+      },
+      hint: "<roomId|rocketchat:roomId|channel:roomId|user:userId|@username>"
+    }
+  },
   outbound: {
     deliveryMode: "direct" as const,
     attachedResults: {
@@ -123,7 +152,12 @@ export const rocketchatPlugin = {
           mediaDir: attachmentMediaDir()
         });
         await client.initialize();
-        const messageId = await client.postMessage(params.to, params.text);
+        // Normalize prefixed targets so direct REST calls reach a raw roomId.
+        const target = params.to
+          .trim()
+          .replace(/^rocketchat:(?:channel:|user:)?/i, "")
+          .replace(/^channel:/i, "");
+        const messageId = await client.postMessage(target, params.text);
 
         return { ok: true, messageId };
       }
