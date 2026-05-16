@@ -49,7 +49,16 @@ const accountSchema = z
      * false to fall back to "thread when triggered in thread, else
      * reply top-level".
      */
-    forceThread: z.boolean().default(true)
+    forceThread: z.boolean().default(true),
+    /**
+     * Optional explicit OpenClaw agent id this account should dispatch
+     * inbound traffic to. When unset, the channel runtime's default
+     * routing (typically the `main` agent) is used. When set, the
+     * resolved route is rewritten so the agent's own session store and
+     * session key are used — letting different bot identities map onto
+     * different agent loops, workspaces, and personas.
+     */
+    agent: z.string().min(1).optional()
   })
   .strict();
 

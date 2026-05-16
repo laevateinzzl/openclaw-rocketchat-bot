@@ -108,6 +108,13 @@ export async function dispatchInboundEventWithChannelRuntime(params: {
   event: InboundEvent;
   channelRuntime: ChannelRuntimeLike;
   attachmentClient?: AttachmentDownloadClientLike;
+  /**
+   * Optional agent id override. When set, the resolved route's
+   * `agentId` + `sessionKey` + `mainSessionKey` are rewritten so the
+   * agent's own session store and key are used — letting different
+   * bot identities map onto different agent loops.
+   */
+  agent?: string;
   deliver(payload: OutboundReplyPayload, info: ReplyDeliverInfo): Promise<void>;
   onRecordError(err: unknown): void;
   onDispatchError(err: unknown, info: ReplyDeliverInfo): void;
@@ -117,15 +124,18 @@ export async function dispatchInboundEventWithChannelRuntime(params: {
     roomId: params.event.roomId,
     messageId: params.event.messageId
   };
-  const route = params.channelRuntime.routing.resolveAgentRoute({
-    cfg: params.cfg,
-    channel: "rocketchat",
-    accountId: params.accountId,
-    peer: {
-      kind: params.event.roomType,
-      id: params.event.roomId
-    }
-  });
+  const route = applyAgentOverride(
+    params.channelRuntime.routing.resolveAgentRoute({
+      cfg: params.cfg,
+      channel: "rocketchat",
+      accountId: params.accountId,
+      peer: {
+        kind: params.event.roomType,
+        id: params.event.roomId
+      }
+    }),
+    params.agent
+  );
   const storePath = params.channelRuntime.session.resolveStorePath(params.cfg.session?.store, {
     agentId: route.agentId
   });
@@ -232,6 +242,42 @@ function normalizeReplyDispatchResult(value: unknown): ReplyDispatchResult {
       block: toCount(countsRecord?.block),
       final: toCount(countsRecord?.final)
     }
+  };
+}
+
+/**
+ * Replace the agent id segment of a sessionKey while preserving the rest.
+ * OpenClaw session keys follow `agent:<id>:<channel>:<peer.kind>:<peer.id>`.
+ * If the key doesn't match that pattern the original is returned unchanged
+ * (and an override request is logged) — better to dispatch to the wrong
+ * agent than to crash on a runtime format change.
+ */
+export function rebuildSessionKeyForAgent(original: string, agentId: string): string {
+  const parts = original.split(":");
+  if (parts.length >= 2 && parts[0] === "agent") {
+    parts[1] = agentId;
+    return parts.join(":");
+  }
+  console.warn(
+    `[rocketchat] cannot apply agent override "${agentId}" to sessionKey "${original}" — unrecognised format`
+  );
+  return original;
+}
+
+export function applyAgentOverride(
+  route: ResolvedAgentRoute,
+  override: string | undefined
+): ResolvedAgentRoute {
+  if (!override || override === route.agentId) {
+    return route;
+  }
+  return {
+    ...route,
+    agentId: override,
+    sessionKey: rebuildSessionKeyForAgent(route.sessionKey, override),
+    mainSessionKey: route.mainSessionKey
+      ? rebuildSessionKeyForAgent(route.mainSessionKey, override)
+      : undefined
   };
 }
 

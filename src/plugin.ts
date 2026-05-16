@@ -262,6 +262,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               event,
               channelRuntime,
               attachmentClient: client,
+              agent: account.agent,
               deliver: async (payload, info) => {
                 await session.update({
                   kind: info.kind,

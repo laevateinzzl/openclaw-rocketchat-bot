@@ -123,6 +123,11 @@
                   "type": "boolean",
                   "default": true,
                   "description": "If true (default), every bot reply lives inside a thread. Set false to fall back to: thread when triggered in thread, else reply top-level."
+                },
+                "agent": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Optional explicit OpenClaw agent id this account should dispatch inbound traffic to. When unset, the channel runtime's default routing (typically `main`) is used. When set, the resolved route is rewritten so the agent's own session store and session key are used."
                 }
               },
               "required": [

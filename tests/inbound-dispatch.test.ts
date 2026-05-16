@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { InboundEvent } from "../src/inbound/types.js";
-import { dispatchInboundEventWithChannelRuntime } from "../src/inbound-dispatch.js";
+import {
+  applyAgentOverride,
+  dispatchInboundEventWithChannelRuntime,
+  rebuildSessionKeyForAgent
+} from "../src/inbound-dispatch.js";
 
 describe("dispatchInboundEventWithChannelRuntime", () => {
   it("records and dispatches direct messages through channelRuntime", async () => {
@@ -331,5 +335,117 @@ describe("dispatchInboundEventWithChannelRuntime", () => {
 
     infoSpy.mockRestore();
     warnSpy.mockRestore();
+  });
+
+  it("rewrites the resolved route when an agent override is supplied", async () => {
+    const resolveAgentRoute = vi.fn().mockReturnValue({
+      agentId: "main",
+      sessionKey: "agent:main:rocketchat:channel:room-1",
+      mainSessionKey: "agent:main:rocketchat:channel:room-1",
+      accountId: "main"
+    });
+    const resolveStorePath = vi.fn().mockReturnValue("/tmp/openclaw/bettina-store");
+    const readSessionUpdatedAt = vi.fn().mockReturnValue(undefined);
+    const resolveEnvelopeFormatOptions = vi.fn().mockReturnValue({});
+    const formatAgentEnvelope = vi.fn().mockReturnValue("[Rocket.Chat]");
+    const finalizeInboundContext = vi.fn((ctx) => ({ ...ctx, SessionKey: ctx.SessionKey }));
+    const recordInboundSession = vi.fn().mockResolvedValue(undefined);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "pong" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const event: InboundEvent = {
+      accountId: "bettina",
+      roomId: "room-1",
+      roomType: "channel",
+      messageId: "m-1",
+      tmid: null,
+      senderId: "u-1",
+      senderName: "Alice",
+      text: "hi",
+      mentions: [],
+      attachments: [],
+      sentAt: "2026-05-17T08:00:00.000Z",
+      raw: {}
+    };
+
+    await dispatchInboundEventWithChannelRuntime({
+      cfg: { session: { store: "memory" } },
+      accountId: "bettina",
+      event,
+      agent: "bettina",
+      channelRuntime: {
+        routing: { resolveAgentRoute },
+        session: { resolveStorePath, readSessionUpdatedAt, recordInboundSession },
+        reply: {
+          resolveEnvelopeFormatOptions,
+          formatAgentEnvelope,
+          finalizeInboundContext,
+          dispatchReplyWithBufferedBlockDispatcher
+        }
+      },
+      deliver,
+      onRecordError: vi.fn(),
+      onDispatchError: vi.fn()
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith("memory", { agentId: "bettina" });
+    expect(readSessionUpdatedAt).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw/bettina-store",
+      sessionKey: "agent:bettina:rocketchat:channel:room-1"
+    });
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({ SessionKey: "agent:bettina:rocketchat:channel:room-1" })
+    );
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:bettina:rocketchat:channel:room-1",
+        updateLastRoute: expect.objectContaining({
+          sessionKey: "agent:bettina:rocketchat:channel:room-1"
+        })
+      })
+    );
+  });
+});
+
+describe("rebuildSessionKeyForAgent", () => {
+  it("replaces the agent id segment in a standard session key", () => {
+    expect(
+      rebuildSessionKeyForAgent("agent:main:rocketchat:channel:room-1", "bettina")
+    ).toBe("agent:bettina:rocketchat:channel:room-1");
+  });
+
+  it("returns the original key unchanged when the format is unexpected", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(rebuildSessionKeyForAgent("legacy-key", "bettina")).toBe("legacy-key");
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
+  });
+});
+
+describe("applyAgentOverride", () => {
+  const baseRoute = {
+    agentId: "main",
+    sessionKey: "agent:main:rocketchat:channel:r",
+    mainSessionKey: "agent:main:rocketchat:channel:r",
+    accountId: "main"
+  };
+
+  it("returns the route unchanged when no override is supplied", () => {
+    expect(applyAgentOverride(baseRoute, undefined)).toEqual(baseRoute);
+  });
+
+  it("returns the route unchanged when the override equals the resolved agent", () => {
+    expect(applyAgentOverride(baseRoute, "main")).toEqual(baseRoute);
+  });
+
+  it("rewrites agentId and both session keys when override differs", () => {
+    expect(applyAgentOverride(baseRoute, "bettina")).toEqual({
+      agentId: "bettina",
+      sessionKey: "agent:bettina:rocketchat:channel:r",
+      mainSessionKey: "agent:bettina:rocketchat:channel:r",
+      accountId: "main"
+    });
   });
 });
