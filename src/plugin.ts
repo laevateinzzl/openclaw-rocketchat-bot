@@ -134,33 +134,40 @@ export const rocketchatPlugin = {
   },
   outbound: {
     deliveryMode: "direct" as const,
-    attachedResults: {
-      async sendText(params: {
-        cfg?: unknown;
-        accountId: string;
-        to: string;
-        text: string;
-      }): Promise<{ ok: boolean; messageId: string }> {
-        const account = resolveAccount(params.cfg ?? {}, params.accountId);
-        if (!account) {
-          throw new Error(`Unknown Rocket.Chat account: ${params.accountId}`);
-        }
-
-        const client = new RocketChatClient({
-          serverUrl: account.serverUrl,
-          auth: account.auth,
-          mediaDir: attachmentMediaDir()
-        });
-        await client.initialize();
-        // Normalize prefixed targets so direct REST calls reach a raw roomId.
-        const target = params.to
-          .trim()
-          .replace(/^rocketchat:(?:channel:|user:)?/i, "")
-          .replace(/^channel:/i, "");
-        const messageId = await client.postMessage(target, params.text);
-
-        return { ok: true, messageId };
+    resolveTarget: ({ to }: { to: string }) => {
+      const trimmed = to?.trim();
+      if (!trimmed) {
+        return { ok: false as const, error: new Error("Rocket.Chat send requires a target id") };
       }
+      const normalized = trimmed
+        .replace(/^rocketchat:(?:channel:|user:)?/i, "")
+        .replace(/^channel:/i, "");
+      return { ok: true as const, to: normalized };
+    },
+    sendText: async (params: {
+      cfg?: unknown;
+      accountId: string;
+      to: string;
+      text: string;
+      replyToId?: string;
+    }): Promise<{ ok: boolean; messageId: string; channel: string }> => {
+      const account = resolveAccount(params.cfg ?? {}, params.accountId);
+      if (!account) {
+        throw new Error(`Unknown Rocket.Chat account: ${params.accountId}`);
+      }
+      const client = new RocketChatClient({
+        serverUrl: account.serverUrl,
+        auth: account.auth,
+        mediaDir: attachmentMediaDir()
+      });
+      await client.initialize();
+      const target = params.to
+        .trim()
+        .replace(/^rocketchat:(?:channel:|user:)?/i, "")
+        .replace(/^channel:/i, "");
+      const tmidOptions = params.replyToId ? { tmid: params.replyToId } : undefined;
+      const messageId = await client.postMessage(target, params.text, tmidOptions);
+      return { ok: true, messageId, channel: "rocketchat" };
     }
   }
 };

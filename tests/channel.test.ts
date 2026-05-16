@@ -108,12 +108,12 @@ describe("sendReplyLifecycle", () => {
     });
 
     expect(client.postMessage).toHaveBeenCalledTimes(1);
-    expect(client.postMessage).toHaveBeenCalledWith("room-1", "思考中...", undefined);
+    expect(client.postMessage).toHaveBeenCalledWith("room-1", "Thinking…", undefined);
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       1,
       "room-1",
       "placeholder-1",
-      "正在调用工具..."
+      "Running a tool…"
     );
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       2,
@@ -151,13 +151,13 @@ describe("sendReplyLifecycle", () => {
       1,
       "room-1",
       "placeholder-1",
-      "正在调用工具..."
+      "Running a tool…"
     );
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       2,
       "room-1",
       "placeholder-1",
-      "处理失败，请稍后重试。"
+      "Something went wrong while replying. Try again."
     );
   });
 
@@ -180,13 +180,13 @@ describe("sendReplyLifecycle", () => {
       1,
       "room-1",
       "placeholder-1",
-      "正在调用工具..."
+      "Running a tool…"
     );
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       2,
       "room-1",
       "placeholder-1",
-      "未生成可发送的回复。"
+      "(no reply generated)"
     );
   });
 

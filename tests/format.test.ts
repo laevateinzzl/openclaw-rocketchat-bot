@@ -4,7 +4,7 @@ import { THINKING_PLACEHOLDER, formatFinalReply } from "../src/format.js";
 
 describe("formatFinalReply", () => {
   it("uses a stable thinking placeholder", () => {
-    expect(THINKING_PLACEHOLDER).toBe("思考中...");
+    expect(THINKING_PLACEHOLDER).toBe("Thinking…");
   });
 
   it("preserves fenced code blocks", () => {
@@ -14,7 +14,7 @@ describe("formatFinalReply", () => {
   });
 
   it("falls back for empty output", () => {
-    expect(formatFinalReply("")).toBe("未生成可发送的回复。");
-    expect(formatFinalReply("   ")).toBe("未生成可发送的回复。");
+    expect(formatFinalReply("")).toBe("(no reply generated)");
+    expect(formatFinalReply("   ")).toBe("(no reply generated)");
   });
 });

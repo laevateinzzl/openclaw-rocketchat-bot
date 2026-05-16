@@ -1,8 +1,8 @@
-export const THINKING_PLACEHOLDER = "思考中...";
-export const EMPTY_REPLY_FALLBACK = "未生成可发送的回复。";
-export const TOOL_REPLY_FALLBACK = "正在调用工具...";
-export const BLOCK_REPLY_FALLBACK = "正在生成回复...";
-export const FAILED_REPLY_FALLBACK = "处理失败，请稍后重试。";
+export const THINKING_PLACEHOLDER = "Thinking…";
+export const EMPTY_REPLY_FALLBACK = "(no reply generated)";
+export const TOOL_REPLY_FALLBACK = "Running a tool…";
+export const BLOCK_REPLY_FALLBACK = "Drafting a reply…";
+export const FAILED_REPLY_FALLBACK = "Something went wrong while replying. Try again.";
 
 type ReplyPayload = {
   text?: string;
