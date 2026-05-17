@@ -262,6 +262,12 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               event,
               channelRuntime,
               attachmentClient: client,
+              // Same client doubles as the thread-context fetcher: when
+              // the trigger arrived inside a thread, dispatch fetches
+              // the parent + prior thread replies so the agent sees
+              // the full conversation context (users routinely mention
+              // bots in replies that omit context one message up).
+              threadContextClient: client,
               agent: account.agent,
               deliver: async (payload, info) => {
                 await session.update({

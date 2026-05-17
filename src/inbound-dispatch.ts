@@ -55,6 +55,39 @@ type AttachmentDownloadClientLike = {
   ): Promise<string>;
 };
 
+/**
+ * Minimal contract for fetching thread context when an inbound event
+ * lives inside a thread. We don't want a hard dependency on the full
+ * RocketChatClient surface — tests can stub this with a couple methods.
+ */
+export type ThreadContextClientLike = {
+  getMessage(messageId: string): Promise<{
+    id: string;
+    text: string;
+    username: string;
+    ts: string;
+    tmid: string | null;
+  } | null>;
+  getThreadMessages(
+    tmid: string,
+    count: number
+  ): Promise<Array<{ id: string; text: string; username: string; ts: string }>>;
+};
+
+/**
+ * Cap for thread-context replies we fetch alongside the parent. We
+ * include the bot's own previous replies so it can pick up where it
+ * left off without re-asking. Set conservatively — the agent already
+ * has session memory keyed by the room.
+ */
+const THREAD_CONTEXT_REPLY_COUNT = 10;
+
+/**
+ * Cap for parent + replies text length (chars). Threads can grow long;
+ * the agent's prompt has a budget and threads should help, not flood.
+ */
+const THREAD_CONTEXT_MAX_CHARS = 4000;
+
 export type ChannelRuntimeLike = {
   routing: {
     resolveAgentRoute(params: {
@@ -109,6 +142,16 @@ export async function dispatchInboundEventWithChannelRuntime(params: {
   channelRuntime: ChannelRuntimeLike;
   attachmentClient?: AttachmentDownloadClientLike;
   /**
+   * Optional thread-context client. When set AND the inbound event
+   * lives inside a thread (`event.tmid` is truthy), the parent message
+   * and the last few thread replies are fetched and prepended to the
+   * body so the agent doesn't have to ask "what are we talking about?"
+   * after a user mentions it in a reply that omits context.
+   * Best-effort — failures are silent and we fall back to the bare
+   * trigger text.
+   */
+  threadContextClient?: ThreadContextClientLike;
+  /**
    * Optional agent id override. When set, the resolved route's
    * `agentId` + `sessionKey` + `mainSessionKey` are rewritten so the
    * agent's own session store and key are used — letting different
@@ -146,13 +189,28 @@ export async function dispatchInboundEventWithChannelRuntime(params: {
   const envelopeOptions = params.channelRuntime.reply.resolveEnvelopeFormatOptions(params.cfg);
   const timestamp = toEpochMs(params.event.sentAt);
   const to = buildRecipientAddress(params.event);
+
+  // If the trigger arrived inside a thread, fetch the parent message
+  // and the recent thread replies so the agent sees the actual context
+  // — users routinely mention bots in replies that omit context that
+  // sits one message up. Falls back silently when client is missing,
+  // when the API errors, or when the trigger is top-level.
+  const threadContext = await buildThreadContextSection(
+    params.event,
+    params.threadContextClient,
+    logContext
+  );
+  const enrichedTriggerText = threadContext
+    ? `${threadContext}\n\n${params.event.text}`
+    : params.event.text;
+
   const body = params.channelRuntime.reply.formatAgentEnvelope({
     channel: "Rocket.Chat",
     from: buildConversationLabel(params.event),
     timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
-    body: params.event.text
+    body: enrichedTriggerText
   });
   const mediaContext = await buildMediaContext(
     params.event.attachments,
@@ -161,7 +219,7 @@ export async function dispatchInboundEventWithChannelRuntime(params: {
   );
   const ctxPayload = params.channelRuntime.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: params.event.text,
+    BodyForAgent: enrichedTriggerText,
     RawBody: params.event.text,
     CommandBody: params.event.text,
     From: buildSenderAddress(params.event),
@@ -383,6 +441,99 @@ function buildRecipientAddress(event: InboundEvent): string {
 function toEpochMs(value: string): number | undefined {
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? undefined : timestamp;
+}
+
+/**
+ * Build a `Thread context (parent + prior replies)` preamble when the
+ * inbound event lives inside a thread. Returns `null` when:
+ *   - the event has no `tmid` (top-level message — no parent),
+ *   - no `threadContextClient` was provided,
+ *   - or both the parent fetch and the thread-replies fetch return
+ *     nothing useful.
+ *
+ * The returned string is plain text that can be prepended to the
+ * agent body. It does NOT include the trigger message itself (that
+ * stays in `event.text` and is appended by the caller).
+ *
+ * The bot's own previous replies in the thread are included so it
+ * can pick up where it left off without re-asking. The cap is
+ * conservative — see THREAD_CONTEXT_MAX_CHARS / _REPLY_COUNT.
+ */
+async function buildThreadContextSection(
+  event: InboundEvent,
+  client: ThreadContextClientLike | undefined,
+  logContext: AttachmentLogContext
+): Promise<string | null> {
+  if (!event.tmid || !client) {
+    return null;
+  }
+
+  let parent: Awaited<ReturnType<ThreadContextClientLike["getMessage"]>> = null;
+  let replies: Awaited<ReturnType<ThreadContextClientLike["getThreadMessages"]>> = [];
+
+  try {
+    parent = await client.getMessage(event.tmid);
+  } catch (error) {
+    logAttachmentWarn(logContext, {
+      type: "thread-context-parent-failed",
+      tmid: event.tmid,
+      error: describeError(error)
+    });
+  }
+
+  try {
+    replies = await client.getThreadMessages(event.tmid, THREAD_CONTEXT_REPLY_COUNT);
+  } catch (error) {
+    logAttachmentWarn(logContext, {
+      type: "thread-context-replies-failed",
+      tmid: event.tmid,
+      error: describeError(error)
+    });
+  }
+
+  // Drop the trigger message itself out of the replies list (we
+  // already have it in event.text — repeating it just wastes tokens
+  // and confuses the agent into thinking the same line was said
+  // twice).
+  const repliesExcludingTrigger = replies.filter((r) => r.id !== event.messageId);
+
+  if (!parent && repliesExcludingTrigger.length === 0) {
+    return null;
+  }
+
+  const lines: string[] = ["[Thread context — Nachrichten ÜBER der aktuellen Antwort]"];
+
+  if (parent) {
+    const parentLine = parent.text.trim().length > 0
+      ? `Parent (@${parent.username}): ${parent.text.trim()}`
+      : `Parent (@${parent.username}): (Nachricht ohne Text — vermutlich Attachment/Reaktion)`;
+    lines.push(parentLine);
+  }
+
+  if (repliesExcludingTrigger.length > 0) {
+    lines.push("");
+    lines.push("Vorherige Thread-Antworten (chronologisch):");
+    for (const reply of repliesExcludingTrigger) {
+      const trimmedText = reply.text.trim();
+      if (trimmedText.length === 0) continue;
+      lines.push(`  @${reply.username}: ${trimmedText}`);
+    }
+  }
+
+  lines.push("[Ende Thread context]");
+  const section = lines.join("\n");
+
+  if (section.length <= THREAD_CONTEXT_MAX_CHARS) {
+    return section;
+  }
+
+  // Soft-cap: keep the leading parent + a trimming notice so the agent
+  // knows context was clipped rather than ending mid-sentence and
+  // wondering whether they missed something important.
+  return (
+    section.slice(0, THREAD_CONTEXT_MAX_CHARS - 80).trimEnd() +
+    `\n  …[Thread-Kontext nach ${THREAD_CONTEXT_MAX_CHARS} Zeichen abgeschnitten]\n[Ende Thread context]`
+  );
 }
 
 async function buildMediaContext(
