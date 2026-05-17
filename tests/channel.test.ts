@@ -161,7 +161,7 @@ describe("sendReplyLifecycle", () => {
     );
   });
 
-  it("resolves the placeholder with an empty final fallback when run completes without a final update", async () => {
+  it("resolves the placeholder with an empty final fallback when run completes without a final update and the client cannot delete", async () => {
     const client = {
       postMessage: vi.fn().mockResolvedValue("placeholder-1"),
       updateMessage: vi.fn().mockResolvedValue(undefined)
@@ -188,6 +188,64 @@ describe("sendReplyLifecycle", () => {
       "placeholder-1",
       "(no reply generated)"
     );
+  });
+
+  it("deletes the placeholder instead of leaving an empty-reply fallback when the client supports deleteMessage", async () => {
+    const client = {
+      postMessage: vi.fn().mockResolvedValue("placeholder-1"),
+      updateMessage: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await sendReplyLifecycle({
+      client,
+      roomId: "room-1",
+      run: async (session) => {
+        await session.update({ kind: "tool", payload: {} });
+      }
+    });
+
+    // Tool stage still updates the placeholder once with "Running a tool…"
+    expect(client.updateMessage).toHaveBeenCalledTimes(1);
+    expect(client.updateMessage).toHaveBeenCalledWith(
+      "room-1",
+      "placeholder-1",
+      "Running a tool…"
+    );
+    // The empty-final stage deletes instead of leaving fallback text behind
+    expect(client.deleteMessage).toHaveBeenCalledExactlyOnceWith(
+      "room-1",
+      "placeholder-1"
+    );
+  });
+
+  it("falls back to updating the placeholder when deleteMessage throws", async () => {
+    const client = {
+      postMessage: vi.fn().mockResolvedValue("placeholder-1"),
+      updateMessage: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockRejectedValue(new Error("forbidden"))
+    };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await sendReplyLifecycle({
+      client,
+      roomId: "room-1",
+      run: async (session) => {
+        await session.update({ kind: "tool", payload: {} });
+      }
+    });
+
+    expect(client.deleteMessage).toHaveBeenCalledTimes(1);
+    // tool stage update + fallback update after delete fails
+    expect(client.updateMessage).toHaveBeenCalledTimes(2);
+    expect(client.updateMessage).toHaveBeenNthCalledWith(
+      2,
+      "room-1",
+      "placeholder-1",
+      "(no reply generated)"
+    );
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it("uploads a final attachment after updating the placeholder message", async () => {

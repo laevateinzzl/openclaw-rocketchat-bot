@@ -197,6 +197,21 @@ export class RocketChatClient {
     });
   }
 
+  async deleteMessage(roomId: string, messageId: string): Promise<void> {
+    await this.initialize();
+    await this.requestJson(new URL("/api/v1/chat.delete", this.serverUrl), {
+      method: "POST",
+      body: JSON.stringify({
+        roomId,
+        msgId: messageId,
+        // `asUser: true` makes RC delete from the bot account's
+        // permission scope (otherwise admin-only). Bots can always
+        // delete their own messages.
+        asUser: true
+      })
+    });
+  }
+
   async downloadAttachmentToTempFile(
     url: string,
     options?: { fileName?: string }
