@@ -7,6 +7,12 @@ import { RocketChatClient } from "./client.js";
 import { parsePluginConfig, type PluginAccountConfig } from "./config.js";
 import type { InboundAttachment } from "./inbound/attachments.js";
 import { RestPollingTransport } from "./inbound/polling.js";
+import {
+  mergeTranscriptionsIntoText,
+  transcribeAudioAttachments,
+  transcribeConfigFromEnv,
+  type TranscribeConfig
+} from "./inbound/transcribe.js";
 import type { InboundTransport } from "./inbound/types.js";
 import { createWebSocketTransport } from "./inbound/websocket.js";
 import {
@@ -14,6 +20,7 @@ import {
   type ChannelRuntimeLike,
   type OpenClawConfigLike
 } from "./inbound-dispatch.js";
+import { getInboundAnchor, recordInboundAnchor } from "./inbound-state.js";
 
 export type ResolvedAccount = PluginAccountConfig & {
   accountId: string;
@@ -103,30 +110,83 @@ export const rocketchatPlugin = {
   threading: {
     topLevelReplyToMode: "reply" as const
   },
+  messaging: {
+    targetPrefixes: ["rocketchat", "channel", "user", "@"],
+    normalizeTarget: (target: string): string | undefined => {
+      const trimmed = target?.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      // `rocketchat:<roomId>` / `channel:<roomId>` / `user:<userId>` -> raw id
+      return trimmed.replace(/^rocketchat:(?:channel:|user:)?/i, "").replace(/^channel:/i, "");
+    },
+    targetResolver: {
+      looksLikeId: (id: string): boolean => {
+        const trimmed = id?.trim();
+        if (!trimmed) {
+          return false;
+        }
+        // Mongo ObjectId-style (24 hex) or 17-char base62 Rocket.Chat ids,
+        // plus prefixed forms we accept above.
+        return (
+          /^[a-z0-9]{8,32}$/i.test(trimmed) ||
+          /^rocketchat:/i.test(trimmed) ||
+          /^channel:/i.test(trimmed) ||
+          /^user:/i.test(trimmed) ||
+          /^@/.test(trimmed)
+        );
+      },
+      hint: "<roomId|rocketchat:roomId|channel:roomId|user:userId|@username>"
+    }
+  },
   outbound: {
     deliveryMode: "direct" as const,
-    attachedResults: {
-      async sendText(params: {
-        cfg?: unknown;
-        accountId: string;
-        to: string;
-        text: string;
-      }): Promise<{ ok: boolean; messageId: string }> {
-        const account = resolveAccount(params.cfg ?? {}, params.accountId);
-        if (!account) {
-          throw new Error(`Unknown Rocket.Chat account: ${params.accountId}`);
-        }
-
-        const client = new RocketChatClient({
-          serverUrl: account.serverUrl,
-          auth: account.auth,
-          mediaDir: attachmentMediaDir()
-        });
-        await client.initialize();
-        const messageId = await client.postMessage(params.to, params.text);
-
-        return { ok: true, messageId };
+    resolveTarget: ({ to }: { to: string }) => {
+      const trimmed = to?.trim();
+      if (!trimmed) {
+        return { ok: false as const, error: new Error("Rocket.Chat send requires a target id") };
       }
+      const normalized = trimmed
+        .replace(/^rocketchat:(?:channel:|user:)?/i, "")
+        .replace(/^channel:/i, "");
+      return { ok: true as const, to: normalized };
+    },
+    sendText: async (params: {
+      cfg?: unknown;
+      accountId: string;
+      to: string;
+      text: string;
+      replyToId?: string;
+    }): Promise<{ ok: boolean; messageId: string; channel: string }> => {
+      const account = resolveAccount(params.cfg ?? {}, params.accountId);
+      if (!account) {
+        throw new Error(`Unknown Rocket.Chat account: ${params.accountId}`);
+      }
+      const client = new RocketChatClient({
+        serverUrl: account.serverUrl,
+        auth: account.auth,
+        mediaDir: attachmentMediaDir()
+      });
+      await client.initialize();
+      const target = params.to
+        .trim()
+        .replace(/^rocketchat:(?:channel:|user:)?/i, "")
+        .replace(/^channel:/i, "");
+
+      // Compute the thread anchor. Caller-supplied replyToId wins;
+      // otherwise consult the per-room cache populated by onEvent
+      // (so tool-based sends that lack inbound context still thread).
+      let tmid = params.replyToId;
+      if (!tmid && account.forceThread !== false) {
+        const anchor = getInboundAnchor(target);
+        if (anchor) {
+          tmid = anchor.tmid ?? anchor.messageId;
+        }
+      }
+
+      const tmidOptions = tmid ? { tmid } : undefined;
+      const messageId = await client.postMessage(target, params.text, tmidOptions);
+      return { ok: true, messageId, channel: "rocketchat" };
     }
   }
 };
@@ -153,6 +213,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   );
   const fatalError = createDeferred<void>();
   let warnedAboutMissingRuntime = false;
+  let warnedAboutMissingTranscribeKey = false;
+  // Resolve transcription config once per account boot; null when no
+  // OPENAI_API_KEY is present so the per-event path can skip cheaply.
+  const transcribeConfig: TranscribeConfig | null =
+    account.transcribeAudio === false ? null : transcribeConfigFromEnv();
 
   const transport = createInboundTransport({
     account,
@@ -171,6 +236,45 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     },
     onEvent: async (event) => {
       const mentionNames = dedupeMentions([identity.username, ...account.mentionNames]);
+
+      // Voice-note pre-pass: when the inbound carries audio attachments,
+      // transcribe them via Whisper and merge the result into event.text
+      // BEFORE the mention filter runs. Without this step a recorded
+      // "Hey @andi …" arrives as msg="", the filter sees no mention and
+      // silently drops the message. After this step the transcript
+      // contains the spoken @-mention (or plain agent name) and the
+      // filter accepts it like any other text trigger.
+      if (
+        account.transcribeAudio !== false &&
+        event.attachments.some((a) => a.kind === "audio")
+      ) {
+        if (!transcribeConfig) {
+          if (!warnedAboutMissingTranscribeKey) {
+            warnedAboutMissingTranscribeKey = true;
+            console.warn(
+              `[rocketchat:${account.accountId}] audio attachment received but OPENAI_API_KEY is unset — skipping transcription`
+            );
+          }
+        } else {
+          const transcripts = await transcribeAudioAttachments(
+            event.attachments,
+            client,
+            transcribeConfig,
+            (entry) =>
+              console.log(
+                `[rocketchat:${account.accountId}] ${JSON.stringify({
+                  ...entry,
+                  roomId: event.roomId,
+                  messageId: event.messageId
+                })}`
+              )
+          );
+          event.text = mergeTranscriptionsIntoText(event.text, transcripts, {
+            mentionAliases: mentionNames
+          });
+        }
+      }
+
       if (
         !shouldHandleInboundEvent(event, {
           botUserId: identity.userId,
@@ -180,11 +284,27 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         return;
       }
 
+      // Cache the anchor so tool-based outbound (which doesn't carry the
+      // inbound context) can still pin its reply to the right thread.
+      recordInboundAnchor(event.roomId, {
+        messageId: event.messageId,
+        tmid: event.tmid
+      });
+
       if (ctx.channelRuntime) {
         const channelRuntime = ctx.channelRuntime;
+        // Always reply inside a thread. If the user @mentioned us inside an
+        // existing thread, stick with that thread; otherwise create a new
+        // thread anchored to the trigger message so channels stay tidy and
+        // each conversation has its own thread context.
+        const forceThread = account.forceThread !== false;
+        const replyTmid = forceThread
+          ? event.tmid ?? event.messageId
+          : event.tmid ?? undefined;
         await sendReplyLifecycle({
           client,
           roomId: event.roomId,
+          tmid: replyTmid ?? undefined,
           run: async (session) => {
             await dispatchInboundEventWithChannelRuntime({
               cfg: (ctx.cfg ?? {}) as OpenClawConfigLike,
@@ -192,6 +312,13 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               event,
               channelRuntime,
               attachmentClient: client,
+              // Same client doubles as the thread-context fetcher: when
+              // the trigger arrived inside a thread, dispatch fetches
+              // the parent + prior thread replies so the agent sees
+              // the full conversation context (users routinely mention
+              // bots in replies that omit context one message up).
+              threadContextClient: client,
+              agent: account.agent,
               deliver: async (payload, info) => {
                 await session.update({
                   kind: info.kind,

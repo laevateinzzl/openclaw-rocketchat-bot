@@ -9,6 +9,7 @@ describe("shouldHandleInboundEvent", () => {
     roomId: "room-1",
     roomType: "channel",
     messageId: "m1",
+    tmid: null,
     senderId: "user-1",
     senderName: "alice",
     text: "hello",
@@ -107,12 +108,12 @@ describe("sendReplyLifecycle", () => {
     });
 
     expect(client.postMessage).toHaveBeenCalledTimes(1);
-    expect(client.postMessage).toHaveBeenCalledWith("room-1", "思考中...");
+    expect(client.postMessage).toHaveBeenCalledWith("room-1", "⏳ Moment … (denke nach)", undefined);
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       1,
       "room-1",
       "placeholder-1",
-      "正在调用工具..."
+      "🛠️ Ich arbeite daran …"
     );
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       2,
@@ -125,6 +126,45 @@ describe("sendReplyLifecycle", () => {
       "room-1",
       "placeholder-1",
       "最终答案"
+    );
+  });
+
+  it("folds successive tool steps into one rolling progress view", async () => {
+    const client = {
+      postMessage: vi.fn().mockResolvedValue("placeholder-1"),
+      updateMessage: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await sendReplyLifecycle({
+      client,
+      roomId: "room-1",
+      run: async (session) => {
+        await session.update({ kind: "tool", payload: { text: "🔎 Web Search: Markt" } });
+        await session.update({ kind: "tool", payload: { text: "📖 Read: docs/markt.md" } });
+        await session.update({ kind: "final", payload: { text: "Analyse fertig." } });
+      }
+    });
+
+    // First tool step: header + the step itself replaces "denke nach".
+    expect(client.updateMessage).toHaveBeenNthCalledWith(
+      1,
+      "room-1",
+      "placeholder-1",
+      "🛠️ Ich arbeite daran …\n🔎 Web Search: Markt"
+    );
+    // Second step is appended below the first — the user sees the history.
+    expect(client.updateMessage).toHaveBeenNthCalledWith(
+      2,
+      "room-1",
+      "placeholder-1",
+      "🛠️ Ich arbeite daran …\n🔎 Web Search: Markt\n📖 Read: docs/markt.md"
+    );
+    // The final answer replaces the progress view entirely.
+    expect(client.updateMessage).toHaveBeenNthCalledWith(
+      3,
+      "room-1",
+      "placeholder-1",
+      "Analyse fertig."
     );
   });
 
@@ -150,17 +190,17 @@ describe("sendReplyLifecycle", () => {
       1,
       "room-1",
       "placeholder-1",
-      "正在调用工具..."
+      "🛠️ Ich arbeite daran …"
     );
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       2,
       "room-1",
       "placeholder-1",
-      "处理失败，请稍后重试。"
+      "❌ Etwas ist beim Antworten schiefgelaufen. Bitte nochmal mentionen."
     );
   });
 
-  it("resolves the placeholder with an empty final fallback when run completes without a final update", async () => {
+  it("resolves the placeholder with an empty final fallback when run completes without a final update and the client cannot delete", async () => {
     const client = {
       postMessage: vi.fn().mockResolvedValue("placeholder-1"),
       updateMessage: vi.fn().mockResolvedValue(undefined)
@@ -179,14 +219,72 @@ describe("sendReplyLifecycle", () => {
       1,
       "room-1",
       "placeholder-1",
-      "正在调用工具..."
+      "🛠️ Ich arbeite daran …"
     );
     expect(client.updateMessage).toHaveBeenNthCalledWith(
       2,
       "room-1",
       "placeholder-1",
-      "未生成可发送的回复。"
+      "(no reply generated)"
     );
+  });
+
+  it("deletes the placeholder instead of leaving an empty-reply fallback when the client supports deleteMessage", async () => {
+    const client = {
+      postMessage: vi.fn().mockResolvedValue("placeholder-1"),
+      updateMessage: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockResolvedValue(undefined)
+    };
+
+    await sendReplyLifecycle({
+      client,
+      roomId: "room-1",
+      run: async (session) => {
+        await session.update({ kind: "tool", payload: {} });
+      }
+    });
+
+    // Tool stage still updates the placeholder once with "🛠️ Ich arbeite daran …"
+    expect(client.updateMessage).toHaveBeenCalledTimes(1);
+    expect(client.updateMessage).toHaveBeenCalledWith(
+      "room-1",
+      "placeholder-1",
+      "🛠️ Ich arbeite daran …"
+    );
+    // The empty-final stage deletes instead of leaving fallback text behind
+    expect(client.deleteMessage).toHaveBeenCalledExactlyOnceWith(
+      "room-1",
+      "placeholder-1"
+    );
+  });
+
+  it("falls back to updating the placeholder when deleteMessage throws", async () => {
+    const client = {
+      postMessage: vi.fn().mockResolvedValue("placeholder-1"),
+      updateMessage: vi.fn().mockResolvedValue(undefined),
+      deleteMessage: vi.fn().mockRejectedValue(new Error("forbidden"))
+    };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await sendReplyLifecycle({
+      client,
+      roomId: "room-1",
+      run: async (session) => {
+        await session.update({ kind: "tool", payload: {} });
+      }
+    });
+
+    expect(client.deleteMessage).toHaveBeenCalledTimes(1);
+    // tool stage update + fallback update after delete fails
+    expect(client.updateMessage).toHaveBeenCalledTimes(2);
+    expect(client.updateMessage).toHaveBeenNthCalledWith(
+      2,
+      "room-1",
+      "placeholder-1",
+      "(no reply generated)"
+    );
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it("uploads a final attachment after updating the placeholder message", async () => {
@@ -213,7 +311,7 @@ describe("sendReplyLifecycle", () => {
     });
 
     expect(updateMessage).toHaveBeenCalledWith("room-1", "placeholder-1", "结果已生成");
-    expect(uploadAttachment).toHaveBeenCalledWith("room-1", "/tmp/result.zip", "结果已生成");
+    expect(uploadAttachment).toHaveBeenCalledWith("room-1", "/tmp/result.zip", "结果已生成", undefined);
   });
 
   it("ignores attachmentPath on non-final stages", async () => {
@@ -272,5 +370,85 @@ describe("sendReplyLifecycle", () => {
     ).rejects.toThrow("upload failed");
 
     expect(updateMessage).toHaveBeenCalledWith("room-1", "placeholder-1", "最终结果");
+  });
+
+  it("updates the placeholder through watchdog stages when the agent stays silent", async () => {
+    vi.useFakeTimers();
+    const postMessage = vi.fn().mockResolvedValue("placeholder-1");
+    const updateMessage = vi.fn().mockResolvedValue(undefined);
+    const deleteMessage = vi.fn().mockResolvedValue(undefined);
+
+    // Run the lifecycle with a `run` that never emits any update, then
+    // resolves at the end. While `run` is pending, advance fake time so
+    // the watchdog fires all three stages.
+    const lifecycle = sendReplyLifecycle({
+      client: { postMessage, updateMessage, deleteMessage },
+      roomId: "room-1",
+      run: () =>
+        new Promise<void>((resolve) => {
+          // Resolve once we've advanced past the terminal stage.
+          setTimeout(resolve, 16 * 60 * 1000);
+        })
+    });
+
+    // Allow the placeholder postMessage to land.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(postMessage).toHaveBeenCalledTimes(1);
+
+    // First watchdog tick after 60s elapsed: stage 1.
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Second after 5m elapsed: stage 2.
+    await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+    // Third after 15m elapsed: stage 3 (terminal).
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+    // Now let the lifecycle's `run` resolve so the lifecycle finishes.
+    await vi.advanceTimersByTimeAsync(60 * 1000);
+    await lifecycle;
+
+    const watchdogCalls = updateMessage.mock.calls
+      .map(([, , text]) => text as string)
+      .filter((t) => t.includes("Bin dran") || t.includes("Dauert länger") || t.includes("Keine Antwort"));
+
+    expect(watchdogCalls).toEqual([
+      "⏳ Bin dran … (1m+)",
+      "🤔 Dauert länger als üblich (5m+)",
+      "❌ Keine Antwort. Bitte @-noch-mal-mentionen."
+    ]);
+
+    vi.useRealTimers();
+  });
+
+  it("stops the watchdog as soon as the agent emits its first real update", async () => {
+    vi.useFakeTimers();
+    const postMessage = vi.fn().mockResolvedValue("placeholder-1");
+    const updateMessage = vi.fn().mockResolvedValue(undefined);
+
+    const lifecycle = sendReplyLifecycle({
+      client: { postMessage, updateMessage },
+      roomId: "room-1",
+      run: async (session) => {
+        // Agent emits a tool update 30s in — before the first watchdog
+        // stage would fire (60s).
+        await new Promise<void>((resolve) => setTimeout(resolve, 30_000));
+        await session.update({ kind: "tool", payload: {} });
+        await session.update({ kind: "final", payload: { text: "fertig" } });
+      }
+    });
+
+    // Advance to 30s — agent's tool update lands.
+    await vi.advanceTimersByTimeAsync(30_000);
+    // Now jump way past all watchdog stages.
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    await lifecycle;
+
+    // No watchdog text should have been written — only the tool fallback
+    // and the final.
+    const watchdogCalls = updateMessage.mock.calls
+      .map(([, , text]) => text as string)
+      .filter((t) => t.includes("Bin dran") || t.includes("Dauert länger") || t.includes("Keine Antwort"));
+
+    expect(watchdogCalls).toEqual([]);
+    vi.useRealTimers();
   });
 });

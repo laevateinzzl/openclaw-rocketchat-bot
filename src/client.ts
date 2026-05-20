@@ -61,6 +61,8 @@ export type RocketChatMessageRecord = {
   ts?: string;
   _updatedAt?: string;
   t?: string;
+  /** Parent thread message id if this message is part of a thread. */
+  tmid?: string;
   u?: {
     _id?: string;
     username?: string;
@@ -168,14 +170,15 @@ export class RocketChatClient {
     return Array.isArray(result.updated) ? result.updated : [];
   }
 
-  async postMessage(roomId: string, text: string): Promise<string> {
+  async postMessage(roomId: string, text: string, options?: { tmid?: string }): Promise<string> {
     await this.initialize();
+    const body: Record<string, string> = { roomId, text };
+    if (options?.tmid) {
+      body.tmid = options.tmid;
+    }
     const payload = await this.requestJson(new URL("/api/v1/chat.postMessage", this.serverUrl), {
       method: "POST",
-      body: JSON.stringify({
-        roomId,
-        text
-      })
+      body: JSON.stringify(body)
     });
 
     const message = asObject(payload.message);
@@ -190,6 +193,103 @@ export class RocketChatClient {
         roomId,
         msgId: messageId,
         text
+      })
+    });
+  }
+
+  /**
+   * Fetch a single message by id. Used by inbound dispatch to enrich
+   * thread replies with their parent-message context (the user often
+   * mentions the bot in a reply without restating context that lives
+   * one message up).
+   *
+   * Returns `null` on 404 / not-found / permission errors rather than
+   * throwing — context-enrichment is best-effort and should never block
+   * the main dispatch path.
+   */
+  async getMessage(messageId: string): Promise<{
+    id: string;
+    text: string;
+    username: string;
+    ts: string;
+    tmid: string | null;
+  } | null> {
+    await this.initialize();
+    try {
+      const url = new URL("/api/v1/chat.getMessage", this.serverUrl);
+      url.searchParams.set("msgId", messageId);
+      const payload = await this.requestJson(url, { method: "GET" });
+      const message = asOptionalObject(payload.message);
+      if (!message) {
+        return null;
+      }
+      const user = asOptionalObject(message.u) ?? {};
+      const id = getOptionalString(message, "_id");
+      if (!id) {
+        return null;
+      }
+      return {
+        id,
+        text: getOptionalString(message, "msg") ?? "",
+        username: getOptionalString(user, "username") ?? "(unknown)",
+        ts: getOptionalString(message, "ts") ?? "",
+        tmid: getOptionalString(message, "tmid")
+      };
+    } catch (error) {
+      // Swallow — caller treats null as "no context, proceed without".
+      return null;
+    }
+  }
+
+  /**
+   * Fetch the last `count` replies in a thread (excluding the parent
+   * message itself, which `getMessage(tmid)` returns separately).
+   * Returned in chronological order (oldest first) so they read like a
+   * conversation. Returns `[]` on error.
+   */
+  async getThreadMessages(
+    tmid: string,
+    count: number
+  ): Promise<Array<{ id: string; text: string; username: string; ts: string }>> {
+    await this.initialize();
+    try {
+      const url = new URL("/api/v1/chat.getThreadMessages", this.serverUrl);
+      url.searchParams.set("tmid", tmid);
+      url.searchParams.set("count", String(count));
+      const payload = await this.requestJson(url, { method: "GET" });
+      const messages = Array.isArray(payload.messages) ? payload.messages : [];
+      const parsed: Array<{ id: string; text: string; username: string; ts: string }> = [];
+      for (const raw of messages) {
+        const m = asOptionalObject(raw);
+        if (!m) continue;
+        const id = getOptionalString(m, "_id");
+        if (!id) continue;
+        const user = asOptionalObject(m.u) ?? {};
+        parsed.push({
+          id,
+          text: getOptionalString(m, "msg") ?? "",
+          username: getOptionalString(user, "username") ?? "(unknown)",
+          ts: getOptionalString(m, "ts") ?? ""
+        });
+      }
+      // RC returns newest-first by default; flip to chronological.
+      return parsed.reverse();
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async deleteMessage(roomId: string, messageId: string): Promise<void> {
+    await this.initialize();
+    await this.requestJson(new URL("/api/v1/chat.delete", this.serverUrl), {
+      method: "POST",
+      body: JSON.stringify({
+        roomId,
+        msgId: messageId,
+        // `asUser: true` makes RC delete from the bot account's
+        // permission scope (otherwise admin-only). Bots can always
+        // delete their own messages.
+        asUser: true
       })
     });
   }
@@ -225,7 +325,12 @@ export class RocketChatClient {
     return filePath;
   }
 
-  async uploadAttachment(roomId: string, filePath: string, text?: string): Promise<string> {
+  async uploadAttachment(
+    roomId: string,
+    filePath: string,
+    text?: string,
+    options?: { tmid?: string }
+  ): Promise<string> {
     await this.initialize();
 
     const fileName = basename(filePath);
@@ -233,6 +338,9 @@ export class RocketChatClient {
     const formData = new FormData();
     if (text?.trim()) {
       formData.append("msg", text.trim());
+    }
+    if (options?.tmid) {
+      formData.append("tmid", options.tmid);
     }
     formData.append("file", new Blob([fileBytes]), fileName);
 
